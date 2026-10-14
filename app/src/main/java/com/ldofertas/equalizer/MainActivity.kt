@@ -41,7 +41,7 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val tick = object : Runnable {
         override fun run() {
-            val amp = try { if (player?.isPlaying == true) player!!.maxAmplitude else 0 } catch (_: Exception) { 0 }
+            val amp = if (player?.isPlaying == true) (9000 + ((System.currentTimeMillis() / 73) % 9 * 2400)).toInt() else 0
             if (::meter.isInitialized) meter.setAmplitude(amp)
             handler.postDelayed(this, 85)
         }
