@@ -3,6 +3,9 @@ package com.ldofertas.equalizer
 import android.app.Activity
 import android.media.MediaPlayer
 import android.media.audiofx.Equalizer
+import android.media.audiofx.Visualizer
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -20,10 +23,12 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.ln
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 class MainActivity : Activity() {
     private var player: MediaPlayer? = null
     private var eq: Equalizer? = null
+    private var visualizer: Visualizer? = null
     private lateinit var status: TextView
     private lateinit var playButton: Button
     private lateinit var powerButton: Button
@@ -41,9 +46,8 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val tick = object : Runnable {
         override fun run() {
-            val amp = if (player?.isPlaying == true) (9000 + ((System.currentTimeMillis() / 73) % 9 * 2400)).toInt() else 0
-            if (::meter.isInitialized) meter.setAmplitude(amp)
-            handler.postDelayed(this, 85)
+            if (::meter.isInitialized && player?.isPlaying != true) meter.setAmplitude(0)
+            handler.postDelayed(this, 100)
         }
     }
 
@@ -52,6 +56,10 @@ class MainActivity : Activity() {
         window.statusBarColor = bg
         window.navigationBarColor = bg
         buildUi()
+        if (android.os.Build.VERSION.SDK_INT >= 23 &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 101)
+        }
         handler.post(tick)
     }
 
@@ -228,6 +236,7 @@ class MainActivity : Activity() {
                 mp.setOnPreparedListener { media ->
                     player = media
                     try { eq = Equalizer(0, media.audioSessionId).apply { enabled = effectOn } } catch (_: Exception) { eq = null }
+                    setupVisualizer(media.audioSessionId)
                     status.text = "Reproduzindo arquivo selecionado"
                     playButton.text = "Ⅱ"
                     applyVolume()
@@ -241,6 +250,35 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun setupVisualizer(audioSessionId: Int) {
+        try {
+            visualizer?.enabled = false
+            visualizer?.release()
+            val v = Visualizer(audioSessionId)
+            v.captureSize = Visualizer.getCaptureSizeRange()[1]
+            v.setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
+                override fun onWaveFormDataCapture(effect: Visualizer, waveform: ByteArray, samplingRate: Int) {
+                    if (player?.isPlaying != true) return
+                    var sum = 0.0
+                    for (sample in waveform) {
+                        val centered = (sample.toInt() and 0xFF) - 128
+                        sum += centered * centered
+                    }
+                    val rms = if (waveform.isNotEmpty()) sqrt(sum / waveform.size) else 0.0
+                    val amplitude = (rms * 256.0).toInt().coerceIn(0, 32768)
+                    if (::meter.isInitialized) meter.setAmplitude(amplitude)
+                }
+                override fun onFftDataCapture(effect: Visualizer, fft: ByteArray, samplingRate: Int) {}
+            }, Visualizer.getMaxCaptureRate() / 2, true, false)
+            v.enabled = true
+            visualizer = v
+        } catch (_: SecurityException) {
+            if (::status.isInitialized) status.text = "Permita o acesso ao microfone para visualizar o ritmo"
+        } catch (_: Exception) {
+            if (::status.isInitialized) status.text = "VU meter indisponível neste aparelho"
+        }
+    }
+
     private fun togglePlayback() {
         val p = player
         if (p == null) { pickAudio(); return }
@@ -251,6 +289,9 @@ class MainActivity : Activity() {
         try { player?.stop() } catch (_: Exception) {}
         try { player?.release() } catch (_: Exception) {}
         player = null
+        try { visualizer?.enabled = false } catch (_: Exception) {}
+        try { visualizer?.release() } catch (_: Exception) {}
+        visualizer = null
         try { eq?.release() } catch (_: Exception) {}
         eq = null
         if (::status.isInitialized) status.text = "Escolha um arquivo de áudio"
